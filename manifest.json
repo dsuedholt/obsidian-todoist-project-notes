@@ -1,11 +1,10 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
+	"id": "obsidian-todoist-project-notes",
+	"name": "Todoist Project Notes",
 	"version": "1.0.0",
-	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"minAppVersion": "1.0.0",
+	"description": "Automatically create notes for nested projects in Todoist. For use with Todoist Sync and Templater.",
+	"author": "David Südholt",
+	"authorUrl": "https://github.com/dsuedholt/obsidian-todoist-project-notes",
 	"isDesktopOnly": false
 }
