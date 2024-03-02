@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { TodoistApi, Project } from '@doist/todoist-api-typescript';
 import { join } from 'path';
 
@@ -46,7 +46,7 @@ export default class ProjectNotesPlugin extends Plugin {
 		});
 	}
 
-	createNoteForProjectAndChildren(info: ProjectInfo, currId: string, path: string = '') {
+	createNoteForProjectAndChildren(info: ProjectInfo, currId: string, path = '') {
 		const p = info.projects.get(currId);
 		if (!p) return;
 
@@ -57,9 +57,9 @@ export default class ProjectNotesPlugin extends Plugin {
 		} else {
 			path = path + (path ? this.settings.separator : '') + p.name;
 		}
-		const noteContent = `# ${p.name}\n\n## Description\n\n## Tasks\n\n## Notes\n`;
+		const noteContent = `---\ntodoist-project-id: '${p.id}'\n---`;
 		
-		let children = info.children.get(currId);
+		const children = info.children.get(currId);
 
 		if (this.settings.parentnotes || !children) {
 			this.app.vault.create(join(baseDir, path) + ".md", noteContent);
@@ -187,7 +187,7 @@ class ProjectNotesTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		let desc = document.createDocumentFragment()		
+		const desc = document.createDocumentFragment()		
 
 		desc.append(
 			document.createTextNode('Enter your Todoist API key. It will be stored unencrypted in your .obsidian directory - be careful when syncing your Vault! You can see your Todoist API Key '),
@@ -240,9 +240,7 @@ class ProjectNotesTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		const outerThis = this;
-		function updateSepDescription() {
-			const sep = outerThis.plugin.settings.separator;
+		function updateSepDescription(sep: string) {
 			const desc = document.createDocumentFragment();
 			desc.append(
 				document.createTextNode(`When nested folders are disabled, this string will be used to separate the project names in the note file path like this: Project${sep}Subproject${sep}Subsubproject.`),
@@ -255,7 +253,7 @@ class ProjectNotesTab extends PluginSettingTab {
 					}),
 				);
 			}
-			else if (sep.match(/[#^\[\]|]/)) {
+			else if (sep.match(/[#^[\]|]/)) {
 				desc.append(
 					desc.createEl('br'),
 					desc.createEl('p',{
@@ -272,15 +270,11 @@ class ProjectNotesTab extends PluginSettingTab {
 				.setPlaceholder('Enter the separator string...')
 				.setValue(this.plugin.settings.separator)
 				.onChange(async (value) => {
-					if (value.match(/[\\/:]/)) {
-						new Notice('The separator string cannot contain any of the following characters: /, \\, :');
-					}
-
 					this.plugin.settings.separator = value;
 					await this.plugin.saveSettings();
-					updateSepDescription();
+					updateSepDescription(value);
 				}));
 		
-		updateSepDescription();
+		updateSepDescription(this.plugin.settings.separator);
 	}
 }
