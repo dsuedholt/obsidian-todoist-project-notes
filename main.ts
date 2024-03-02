@@ -6,6 +6,7 @@ interface ProjectNotesSettings {
 	apikey: string;
 	notefolder: string;
 	nested: boolean;
+	parentnotes: boolean;
 	separator: string;
 }
 
@@ -13,6 +14,7 @@ const DEFAULT_SETTINGS: ProjectNotesSettings = {
 	apikey: '',
 	notefolder: '',
 	nested: true,
+	parentnotes: true,
 	separator: ' ~ '
 }
 
@@ -56,19 +58,22 @@ export default class ProjectNotesPlugin extends Plugin {
 			path = path + (path ? this.settings.separator : '') + p.name;
 		}
 		const noteContent = `# ${p.name}\n\n## Description\n\n## Tasks\n\n## Notes\n`;
-		this.app.vault.create(join(baseDir, path) + ".md", noteContent);
 		
 		let children = info.children.get(currId);
 
-		if (!children) return;
-		
-		if (this.settings.nested) {
-			this.app.vault.createFolder(join(baseDir, path));
+		if (this.settings.parentnotes || !children) {
+			this.app.vault.create(join(baseDir, path) + ".md", noteContent);
 		}
 
-		info.children.get(currId)?.forEach(c => {
-			this.createNoteForProjectAndChildren(info, c, path);
-		});
+		if (children) {			
+			if (this.settings.nested) {
+				this.app.vault.createFolder(join(baseDir, path));
+			}
+
+			info.children.get(currId)?.forEach(c => {
+				this.createNoteForProjectAndChildren(info, c, path);
+			});
+		}
 	}
 
 	// get all projects from Todoist and sort them into a tree structure
@@ -225,6 +230,16 @@ class ProjectNotesTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 		
+		new Setting(containerEl)
+			.setName('Generate Notes for Parent Projects')
+			.setDesc('Enabled: Generate notes for all projects.\nDisabled: Only generate Notes for "Leaf" subprojects without children.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.parentnotes)
+				.onChange(async (value) => {
+					this.plugin.settings.parentnotes = value;
+					await this.plugin.saveSettings();
+				}));
+
 		const outerThis = this;
 		function updateSepDescription() {
 			const sep = outerThis.plugin.settings.separator;
