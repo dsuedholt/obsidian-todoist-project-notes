@@ -1,52 +1,105 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Modal, Notice, normalizePath, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile } from 'obsidian';
 import { TodoistApi, Project } from '@doist/todoist-api-typescript';
 import { join } from 'path';
+
+enum DeletedProjectHandling {
+	Ignore = 'ignore',
+	Archive = 'archive',
+	Delete = 'delete'
+}
 
 interface ProjectNotesSettings {
 	apikey: string;
 	notefolder: string;
 	nested: boolean;
-	parentnotes: boolean;
 	separator: string;
+	deletedProjectHandling: DeletedProjectHandling;
+	archivefolder: string;
 }
 
 const DEFAULT_SETTINGS: ProjectNotesSettings = {
 	apikey: '',
 	notefolder: '',
 	nested: true,
-	parentnotes: true,
-	separator: ' ~ '
+	separator: ' ~ ',
+	deletedProjectHandling: DeletedProjectHandling.Ignore,
+	archivefolder: '__ArchivedNotes'
 }
 
 class ProjectInfo {
 	projects: Map<string, Project>;
 	children: Map<string, string[]>;
 	roots: string[];
+	existingNotes: Map<string, TFile[]>;
 
-	constructor() {
+	initProjects() {
 		this.projects = new Map();
 		this.children = new Map();
 		this.roots = [];
+	}
+
+	constructor() {
+		this.existingNotes = new Map();
+		this.initProjects();
 	}
 }
 
 export default class ProjectNotesPlugin extends Plugin {
 	settings: ProjectNotesSettings;
+	projectInfo: ProjectInfo;
 
 	getTodoistApi() {
 		const api = new TodoistApi(this.settings.apikey);
 		return api;
 	}
 
-	createProjectNotes() {
+	syncProjectNotes() {
 		this.getProjectsTree().then((projInfo) => {
+			if (!projInfo) return;
+			// check existing files in the project folder for Todoist project IDs
+			const rootFolder = this.app.vault.getFolderByPath(this.settings.notefolder);
+			if (!rootFolder) {
+				new Notice(`The specified notes folder '${this.settings.notefolder}' does not exist.`);
+				return;
+			}
+
 			projInfo?.roots.forEach(p => {
-					this.createNoteForProjectAndChildren(projInfo, p);
+					this.syncNoteForProjectAndChildren(projInfo, p);
 				});
+			
+			// handle deleted projects
+			const deletedProjects = Array.from(projInfo.existingNotes.keys()).filter(id => !projInfo?.projects.has(id));
+			const method = this.settings.deletedProjectHandling;
+			if (method !== DeletedProjectHandling.Ignore) {
+				const archiveFolder = this.settings.archivefolder;
+				const archivePath = normalizePath(join(this.settings.notefolder, archiveFolder));
+				const archiveFolderExists = this.app.vault.getFolderByPath(archivePath);
+				if (method === DeletedProjectHandling.Archive) {
+					if (!archiveFolderExists) {
+						this.app.vault.createFolder(archivePath);
+					}
+				}
+				deletedProjects.forEach(id => {
+					const notes = projInfo.existingNotes.get(id);
+					if (notes) {
+						notes.forEach(note => {
+							switch (method) {
+								case DeletedProjectHandling.Archive:
+									this.app.vault.rename(note, join(archivePath, note.basename) + ".md");
+									break;
+								case DeletedProjectHandling.Delete:
+									this.app.vault.delete(note);
+									break;
+							}
+						});
+					}
+				});
+			}
+
 		});
 	}
 
-	createNoteForProjectAndChildren(info: ProjectInfo, currId: string, path = '') {
+	syncNoteForProjectAndChildren(info: ProjectInfo, currId: string, path = '') {
 		const p = info.projects.get(currId);
 		if (!p) return;
 
@@ -59,19 +112,37 @@ export default class ProjectNotesPlugin extends Plugin {
 		}
 		const noteContent = `---\ntodoist-project-id: '${p.id}'\n---`;
 		
+		const normalizedDir = normalizePath(join(baseDir, path));
+		const noteFile = this.app.vault.getFileByPath(normalizedDir + ".md")
+		if (!noteFile) {
+			const existingNotes = info.existingNotes.get(p.id);
+			if (existingNotes) {
+				if (existingNotes.length > 1) {
+					new Notice(`Multiple notes containing the same Project ID as '${path}' exist. Please deal with this manually.`);
+				} else {
+					this.app.vault.rename(existingNotes[0], normalizedDir + ".md");
+				}
+			} else {
+				this.app.vault.create(normalizedDir + ".md", noteContent);
+			}
+		}
+		else {
+			this.app.fileManager.processFrontMatter(noteFile, (frontmatter) => {
+				if (frontmatter['todoist-project-id'] !== p.id) {
+					new Notice(`A note with the name '${path}' already exists, but with a different Todoist project ID. Please rename or move the note manually.`);
+				}
+			});
+		}
+		
 		const children = info.children.get(currId);
 
-		if (this.settings.parentnotes || !children) {
-			this.app.vault.create(join(baseDir, path) + ".md", noteContent);
-		}
-
-		if (children) {			
-			if (this.settings.nested) {
-				this.app.vault.createFolder(join(baseDir, path));
+		if (children) {
+			if (this.settings.nested && !this.app.vault.getAbstractFileByPath(normalizedDir)) {
+				this.app.vault.createFolder(normalizedDir);
 			}
 
 			info.children.get(currId)?.forEach(c => {
-				this.createNoteForProjectAndChildren(info, c, path);
+				this.syncNoteForProjectAndChildren(info, c, path);
 			});
 		}
 	}
@@ -79,6 +150,7 @@ export default class ProjectNotesPlugin extends Plugin {
 	// get all projects from Todoist and sort them into a tree structure
 	getProjectsTree() {
 		const api = this.getTodoistApi();
+		this.projectInfo.initProjects();
 		const projects = api.getProjects()
 			.then((projects) => 
 				projects.reduce((acc, p) => {
@@ -92,7 +164,7 @@ export default class ProjectNotesPlugin extends Plugin {
 						acc.roots.push(p.id);
 					}
 					return acc;
-				}, new ProjectInfo())
+				}, this.projectInfo)
 			)
 			.catch((error) => { 
 				console.error(error);
@@ -101,18 +173,72 @@ export default class ProjectNotesPlugin extends Plugin {
 		return projects;
 	}
 
+	// called when any file in the vault is created, modified or renamed
+	checkProjectInfo(f: TAbstractFile) {
+		if (!(f instanceof TFile)) return;
+		if (!(this.settings.notefolder == '/' || f.path.startsWith(this.settings.notefolder))) return;
+		if (f.path.startsWith(normalizePath(join(this.settings.notefolder, this.settings.archivefolder)))) return;
+
+		this.app.fileManager.processFrontMatter(f, (frontmatter) => {
+			const id = frontmatter['todoist-project-id'];
+			if (id) {
+				const files = this.projectInfo.existingNotes.get(id);
+				if (files && !files.includes(f)) {
+					files.push(f);	
+				} else {
+					this.projectInfo.existingNotes.set(id, [f]);
+				}
+			}
+		});
+
+	}
+
+	// called when any file in the vault is deleted
+	removeProjectInfo(f: TAbstractFile) {
+		if (!(f instanceof TFile)) return;
+		if (!(this.settings.notefolder == '/' || f.path.startsWith(this.settings.notefolder))) return;
+	
+		this.projectInfo.existingNotes.forEach((files, id) => {
+			const index = files.indexOf(f);
+			if (index > -1) {
+				files.splice(index, 1);
+				if (files.length === 0) {
+					this.projectInfo.existingNotes.delete(id);
+				}
+			}
+		});
+	}	
+	
 	async onload() {
+		this.projectInfo = new ProjectInfo();
+
 		await this.loadSettings();
+		this.registerEvent(this.app.vault.on('create', (file) => {
+			this.checkProjectInfo(file);
+		}));
+
+		this.registerEvent(this.app.vault.on('modify', (file) => {
+			this.checkProjectInfo(file);
+		}));
+
+		this.registerEvent(this.app.vault.on('rename', (file) => {
+			this.checkProjectInfo(file);
+		}));
+
+		this.registerEvent(this.app.vault.on('delete', (file) => {
+			this.removeProjectInfo(file);
+		}));
+
 
 		this.addCommand({
-			id: 'create-project-notes',
-			name: 'Create Project Notes',
+			id: 'sync-project-notes',
+			name: 'Sync Todoist project notes',
 			callback: async () => {
 				if (!this.validateSettings(false)) {
 					return;
 				}
 
-				this.createProjectNotes();
+				this.syncProjectNotes();
 			}
 		});
 
@@ -199,7 +325,7 @@ class ProjectNotesTab extends PluginSettingTab {
 		)
 
 		new Setting(containerEl)
-			.setName('Todoist API Key')
+			.setName('Todoist API key')
 			.setDesc(desc)
 			.addText(text => text
 				.setPlaceholder('Enter your API key...')
@@ -210,8 +336,8 @@ class ProjectNotesTab extends PluginSettingTab {
 				}));
 		
 		new Setting(containerEl)
-			.setName('Project Notes Folder')
-			.setDesc('Choose the folder where you want to store your project notes.')
+			.setName('Project notes folder')
+			.setDesc('Choose the folder where you want to store your project notes. NOTE: Please restart Obsidian after changing this setting, otherwise the plugin will not keep track of existing project notes properly.')
 			.addText(text => text
 				.setPlaceholder('Enter the folder name...')
 				.setValue(this.plugin.settings.notefolder)
@@ -221,22 +347,12 @@ class ProjectNotesTab extends PluginSettingTab {
 				}));
 		
 		new Setting(containerEl)
-			.setName('Nested Folders')
+			.setName('Nested folders')
 			.setDesc('Enabled: Sort subprojects into nested folders.\nDisabled: Create all project notes directly in the folder.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.nested)
 				.onChange(async (value) => {
 					this.plugin.settings.nested = value;
-					await this.plugin.saveSettings();
-				}));
-		
-		new Setting(containerEl)
-			.setName('Generate Notes for Parent Projects')
-			.setDesc('Enabled: Generate notes for all projects.\nDisabled: Only generate Notes for "Leaf" subprojects without children.')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.parentnotes)
-				.onChange(async (value) => {
-					this.plugin.settings.parentnotes = value;
 					await this.plugin.saveSettings();
 				}));
 
@@ -265,7 +381,7 @@ class ProjectNotesTab extends PluginSettingTab {
 		}
 
 		const sepSetting = new Setting(containerEl)
-			.setName('Subproject Separator String')
+			.setName('Subproject separator string')
 			.addText(text => text
 				.setPlaceholder('Enter the separator string...')
 				.setValue(this.plugin.settings.separator)
@@ -276,5 +392,32 @@ class ProjectNotesTab extends PluginSettingTab {
 				}));
 		
 		updateSepDescription(this.plugin.settings.separator);
+
+		containerEl.createEl('h2', {text: 'Deleted Projects'})
+		containerEl.createEl('p', {text: 'The plugin saves the unique Todoist project ID in the note file. Renamed projects will automatically be moved. Deleted projects will be handled according to the setting below.'});
+
+		new Setting(containerEl)
+			.setName('Deleted project handling')
+			.setDesc('Choose what to do with deleted projects')
+			.addDropdown(dropdown => dropdown
+				.addOption('ignore', 'Ignore')
+				.addOption('archive', 'Move to Archive')
+				.addOption('delete', 'Delete')
+				.setValue(this.plugin.settings.deletedProjectHandling)
+				.onChange(async (value) => {
+					this.plugin.settings.deletedProjectHandling = value as DeletedProjectHandling;
+					await this.plugin.saveSettings();
+				}));
+			
+		new Setting(containerEl)
+			.setName('Archive folder')
+			.setDesc('Choose the folder (relative to the Project Notes folder) where you want to store archived project notes.')
+			.addText(text => text
+				.setPlaceholder('Enter the folder name...')
+				.setValue(this.plugin.settings.archivefolder)
+				.onChange(async (value) => {
+					this.plugin.settings.archivefolder = value;
+					await this.plugin.saveSettings();
+				}));
 	}
 }
