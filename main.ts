@@ -1,81 +1,117 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { TodoistApi, Project } from '@doist/todoist-api-typescript';
+import { join } from 'path';
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+interface ProjectNotesSettings {
+	apikey: string;
+	notefolder: string;
+	nested: boolean;
+	separator: string;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: ProjectNotesSettings = {
+	apikey: '',
+	notefolder: '',
+	nested: true,
+	separator: ' ~ '
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+class ProjectInfo {
+	projects: Map<string, Project>;
+	children: Map<string, string[]>;
+	roots: string[];
+
+	constructor() {
+		this.projects = new Map();
+		this.children = new Map();
+		this.roots = [];
+	}
+}
+
+export default class ProjectNotesPlugin extends Plugin {
+	settings: ProjectNotesSettings;
+
+	getTodoistApi() {
+		const api = new TodoistApi(this.settings.apikey);
+		return api;
+	}
+
+	createProjectNotes() {
+		this.getProjectsTree().then((projInfo) => {
+			projInfo?.roots.forEach(p => {
+					this.createNoteForProjectAndChildren(projInfo, p);
+				});
+		});
+	}
+
+	createNoteForProjectAndChildren(info: ProjectInfo, currId: string, path: string = '') {
+		const p = info.projects.get(currId);
+		if (!p) return;
+
+		const baseDir = this.settings.notefolder;
+
+		if (this.settings.nested) {
+			path = join(path, p.name);
+		} else {
+			path = path + (path ? this.settings.separator : '') + p.name;
+		}
+		const noteContent = `# ${p.name}\n\n## Description\n\n## Tasks\n\n## Notes\n`;
+		this.app.vault.create(join(baseDir, path) + ".md", noteContent);
+		
+		let children = info.children.get(currId);
+
+		if (!children) return;
+		
+		if (this.settings.nested) {
+			this.app.vault.createFolder(join(baseDir, path));
+		}
+
+		info.children.get(currId)?.forEach(c => {
+			this.createNoteForProjectAndChildren(info, c, path);
+		});
+	}
+
+	// get all projects from Todoist and sort them into a tree structure
+	getProjectsTree() {
+		const api = this.getTodoistApi();
+		const projects = api.getProjects()
+			.then((projects) => 
+				projects.reduce((acc, p) => {
+					acc.projects.set(p.id, p);
+					if (p.parentId) {
+						if (!acc.children.has(p.parentId)) {
+							acc.children.set(p.parentId, []);
+						}
+						acc.children.get(p.parentId)?.push(p.id);
+					} else {
+						acc.roots.push(p.id);
+					}
+					return acc;
+				}, new ProjectInfo())
+			)
+			.catch((error) => { 
+				console.error(error);
+				new Notice('Error fetching projects from Todoist. Please check your API key and try again.');
+			});
+		return projects;
+	}
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+			id: 'create-project-notes',
+			name: 'Create Project Notes',
+			callback: async () => {
+				if (!this.validateSettings(false)) {
+					return;
 				}
+
+				this.createProjectNotes();
 			}
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		this.addSettingTab(new ProjectNotesTab(this.app, this));
 	}
 
 	onunload() {
@@ -89,16 +125,42 @@ export default class MyPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
+
+	validateSettings(checking: boolean) {
+		if (this.settings.apikey === '') {
+			new Notice('Please enter your Todoist API key in the settings.');
+			return false;
+		}
+		if (this.settings.notefolder === '') {
+			new NoSelectedFolderModal(this.app, this).open();
+			return this.settings.notefolder === '';
+		}
+		return true;
+	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
+class NoSelectedFolderModal extends Modal {
+	constructor(app: App, public plugin: ProjectNotesPlugin) {
 		super(app);
+		this.plugin = plugin;
 	}
 
 	onOpen() {
 		const {contentEl} = this;
-		contentEl.setText('Woah!');
+		contentEl.createEl('p', {text: 'You have not set a folder to store your project notes. Do you want to use the root folder?'});
+
+		const buttonContainer = contentEl.createDiv('modal-button-container');		
+		buttonContainer.createEl('button', {text: 'Yes', cls: 'modal-button'})
+			.addEventListener('click', () => {
+				this.plugin.settings.notefolder = '/';
+				this.close();
+			});
+		
+		buttonContainer.createEl('button', {text: 'Cancel', cls: 'modal-button'})
+			.addEventListener('click', () => {
+				this.close();
+			});
+
 	}
 
 	onClose() {
@@ -107,10 +169,10 @@ class SampleModal extends Modal {
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+class ProjectNotesTab extends PluginSettingTab {
+	plugin: ProjectNotesPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: ProjectNotesPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -120,15 +182,90 @@ class SampleSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
+		let desc = document.createDocumentFragment()		
+
+		desc.append(
+			document.createTextNode('Enter your Todoist API key. It will be stored unencrypted in your .obsidian directory - be careful when syncing your Vault! You can see your Todoist API Key '),
+			desc.createEl('a', {
+				href: 'https://app.todoist.com/app/settings/integrations/developer',
+				text: 'here'
+			}),
+			document.createTextNode('.')
+		)
+
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
+			.setName('Todoist API Key')
+			.setDesc(desc)
 			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+				.setPlaceholder('Enter your API key...')
+				.setValue(this.plugin.settings.apikey)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.apikey = value;
 					await this.plugin.saveSettings();
 				}));
+		
+		new Setting(containerEl)
+			.setName('Project Notes Folder')
+			.setDesc('Choose the folder where you want to store your project notes.')
+			.addText(text => text
+				.setPlaceholder('Enter the folder name...')
+				.setValue(this.plugin.settings.notefolder)
+				.onChange(async (value) => {
+					this.plugin.settings.notefolder = value;
+					await this.plugin.saveSettings();
+				}));
+		
+		new Setting(containerEl)
+			.setName('Nested Folders')
+			.setDesc('Enabled: Sort subprojects into nested folders.\nDisabled: Create all project notes directly in the folder.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.nested)
+				.onChange(async (value) => {
+					this.plugin.settings.nested = value;
+					await this.plugin.saveSettings();
+				}));
+		
+		const outerThis = this;
+		function updateSepDescription() {
+			const sep = outerThis.plugin.settings.separator;
+			const desc = document.createDocumentFragment();
+			desc.append(
+				document.createTextNode(`When nested folders are disabled, this string will be used to separate the project names in the note file path like this: Project${sep}Subproject${sep}Subsubproject.`),
+			);
+			if (sep.match(/[\\/:]/)) {
+				desc.append(
+					desc.createEl('br'),
+					desc.createEl('p',{
+						text: 'WARNING:	The separator string cannot contain any of these characters: /, \\, :',
+					}),
+				);
+			}
+			else if (sep.match(/[#^\[\]|]/)) {
+				desc.append(
+					desc.createEl('br'),
+					desc.createEl('p',{
+						text: "WARNING: Obsidian's file linking will break if the separator includes any of these: # ^ [ ] |",
+					}),
+				);
+			}
+			sepSetting.setDesc(desc);
+		}
+
+		const sepSetting = new Setting(containerEl)
+			.setName('Subproject Separator String')
+			.addText(text => text
+				.setPlaceholder('Enter the separator string...')
+				.setValue(this.plugin.settings.separator)
+				.onChange(async (value) => {
+					if (value.match(/[\\/:]/)) {
+						new Notice('The separator string cannot contain any of the following characters: /, \\, :');
+					}
+
+					this.plugin.settings.separator = value;
+					await this.plugin.saveSettings();
+					updateSepDescription();
+				}));
+		
+		updateSepDescription();
 	}
 }
