@@ -9,12 +9,16 @@ class ProjectInfo {
 	projects: Map<string, Project>;
 	children: Map<string, string[]>;
 	roots: string[];
+	notePaths: Map<string, string>;
+	
+	// internal use: keeping track of moved, modified, deleted projects
 	existingNotes: Map<string, TFile[]>;
 
 	initProjects() {
 		this.projects = new Map();
 		this.children = new Map();
 		this.roots = [];
+		this.notePaths = new Map();
 	}
 
 	constructor() {
@@ -105,9 +109,17 @@ export default class ProjectNotesPlugin extends Plugin {
 					throw new Error('Notes folder not found.');
 				}
 
+
+				// construct all note paths for the project tree first, and then actually create the notes in a second step. 
+				// this ensures that the note path for each project is available for templating at note creation time.
+				
 				this.projectInfo.roots.forEach(p => {
-						this.updateNoteForProjectAndChildren(p);
-					});
+					this.updateNotePathForProjectAndChildren(p);
+				});
+				
+				this.projectInfo.roots.forEach(p => {
+					this.createNoteForProjectAndChildren(p);
+				});
 				
 				// handle deleted projects
 				const deletedProjects = Array.from(this.projectInfo.existingNotes.keys()).filter(id => !this.projectInfo.projects.has(id));
@@ -150,7 +162,8 @@ export default class ProjectNotesPlugin extends Plugin {
 			});
 	}
 
-	updateNoteForProjectAndChildren(currId: string, path = '') {
+	// recursively walk the project tree and construct path names for project notes
+	updateNotePathForProjectAndChildren(currId: string, path = '') {
 		const p = this.projectInfo.projects.get(currId);
 		if (!p) return;
 
@@ -161,24 +174,42 @@ export default class ProjectNotesPlugin extends Plugin {
 		} else {
 			path = path + (path ? this.settings.separator : '') + p.name;
 		}
+		
+		this.projectInfo.notePaths.set(currId, normalizePath(join(baseDir, path)));
+		
+		const children = this.projectInfo.children.get(currId);
+
+		if (children) {
+			this.projectInfo.children.get(currId)?.forEach(c => {
+				this.updateNotePathForProjectAndChildren(c, path);
+			});
+		}
+	}
+	
+	createNoteForProjectAndChildren(currId: string) {
+		const p = this.projectInfo.projects.get(currId);
+		if (!p) return;
+
 		const noteContent = `---\ntodoist-project-id: '${p.id}'\n${this.templateFrontMatter}---\n\n${this.templateBody}`;
 		
-		const normalizedDir = normalizePath(join(baseDir, path));
-		const noteFile = this.app.vault.getFileByPath(normalizedDir + ".md")
+		const path = this.projectInfo.notePaths.get(currId);
+		if (!path) return;
+
+		const noteFile = this.app.vault.getFileByPath(path + ".md")
 		if (!noteFile) {
 			const existingNotes = this.projectInfo.existingNotes.get(p.id);
 			if (existingNotes) {
 				if (existingNotes.length > 1) {
 					new Notice(`Multiple notes containing the same Project ID as '${path}' exist. Please deal with this manually.`);
 				} else {
-					this.app.vault.rename(existingNotes[0], normalizedDir + ".md")
+					this.app.vault.rename(existingNotes[0], path + ".md")
 						.catch((error) => {
 							console.error(error);
 							new Notice(`Error moving note to '${path}'. Does it already exist somewhere?`);
 						});
 				}
 			} else {
-				this.app.vault.create(normalizedDir + ".md", noteContent)
+				this.app.vault.create(path + ".md", noteContent)
 					.catch((error) => {
 						console.error(error);
 						new Notice(`Error creating note '${path}'. Does it already exist somewhere?`);
@@ -196,12 +227,12 @@ export default class ProjectNotesPlugin extends Plugin {
 		const children = this.projectInfo.children.get(currId);
 
 		if (children) {
-			if (this.settings.nested && !this.app.vault.getAbstractFileByPath(normalizedDir)) {
-				this.app.vault.createFolder(normalizedDir);
+			if (this.settings.nested && !this.app.vault.getAbstractFileByPath(path)) {
+				this.app.vault.createFolder(path);
 			}
 
 			this.projectInfo.children.get(currId)?.forEach(c => {
-				this.updateNoteForProjectAndChildren(c, path);
+				this.createNoteForProjectAndChildren(c);
 			});
 		}
 	}
