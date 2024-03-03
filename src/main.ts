@@ -48,9 +48,15 @@ export default class ProjectNotesPlugin extends Plugin {
 					}
 					
 					const insert = `Project note: [[${note.basename}]]`;
-					if (desc.includes(insert)) return;
-					
-					desc = insert + '\n' + desc;
+					const lines = desc.split('\n');
+					if (lines[0]?.startsWith('Project note: [[')) {
+						lines[0] = insert;
+					}
+					else {
+						lines.unshift(insert);
+					}
+
+					desc = lines.join('\n');
 					
 					api.updateTask(t.id, { description: desc })
 						.catch((error) => {
