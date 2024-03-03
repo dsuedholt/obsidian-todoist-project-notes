@@ -1,96 +1,73 @@
-# Obsidian Sample Plugin
+# Todoist Project Notes for Obsidian
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Automatically create notes for nested projects in Todoist. For use with [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) and [Templater](https://github.com/SilentVoid13/Templater).
 
-This project uses Typescript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.
+# Table of Contents
 
-**Note:** The Obsidian API is still in early alpha and is subject to change at any time!
+- [Setup](#setup)
+- [Basic Usage](#basic-usage)
+- [Templating](#templating)
+- [Syncing with Todoist](#syncing-with-todoist)
+- [Todos](#todos)
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+# Setup
 
-## First time developing plugins?
+### Installation
 
-Quick starting guide for new plugin devs:
+This plugin is not currently available through Obsidian's community plugins. You can install it manually by downloading `obsidian-todoist-project-notes.zip` from the latest Release and unpacking it in your `.obsidian/plugins` directory.
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+Alternatively, you can clone this repository into `.obsidian/plugins` and run `npm install && npm run dev.
 
-## Releasing new releases
+Then, go to the "Community Plugins" tab in the Obsidian settings, click the reload icon next to "Installed Plugins". "Todoist Project Notes" should show up in the list now; make sure to enable it.
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### Required Settings
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+Go to the plugin's settings and paste your Todoist API key, which you can find [here](https://app.todoist.com/app/settings/integrations/developer). You should also set the folder in which the project notes will be created.
 
-## Adding your plugin to the community plugin list
+### Other Plugins (optional but recommended)
 
-- Check https://github.com/obsidianmd/obsidian-releases/blob/master/plugin-review.md
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+I would recommend that you install the "Todoist Sync" and "Templater" plugins through the Obsidian Community Plugins interface, if you haven't already; they make this plugin a lot more useful. Check that "Trigger Templater on new file creation" is enabled.
 
-## How to use
+# Basic Usage
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+Once you've set up your API key and your project notes folder, bring up the Command palette (Ctrl/Cmd + P by default) and run the "Update Todoist Project Notes" command. The plugin will then create a note for every project and subproject in your Todoist account. By default, they will be sorted into a nested folder structure mirroring your Todoist setup:
 
-## Manually installing the plugin
+![[docs/nested.png]]
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+You can change the settings to generate a flat folder instead, where the projects structure is reflected in the file name:
 
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint .\src\`
+![[docs/flat.png]]
 
-## Funding URL
+# Templating
 
-You can include funding URLs where people who use your plugin can financially support it.
+The real use of this plugin comes from combining it with Templater and Todoist Sync. You can specify a template file that will be inserted into every newly created Project Note. Information about the current and other projects can be accessed from within templates through the `app.plugins.plugins['obsidian-todoist-project-notes'].projectInfo` object. It is defined at the top of `src/main.ts`, where you can see its contents.
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+Using this information, you can build up custom Todoist Sync queries or build up the file structure of the project note however you'd like. Check `Sample Template.md` to get started.
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
-```
+# Syncing with Todoist
 
-If you have multiple URLs, you can also do:
+### Dealing with renamed or moved projects
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
+Every project note saves its unique Todoist project ID in its front matter. This allows for some basic housekeeping when you rename or rearrange your Todoist projects and run the plugin's "update" command again. Rather than recreating the file and making you lose all your notes, the plugin will recognize that a corresponding project file already exists and simply move it.
 
-## API Documentation
+This is somewhat limited though. Links between files will not be automatically updated, which becomes especially clear if you switch between nested and flat structure. I recommend that you try out which structure you like and commit to one before putting the project notes to serious use.
 
-See https://github.com/obsidianmd/obsidian-api
+You can choose in the settings how you'd like the plugin to handle notes belonging to projects that you deleted from your Todoist.
+- Ignore: simply leave the project notes be and don't update them anymore.
+- Archive: Move them to a user-defined archive folder.
+- Delete: well, delete.
+
+### Inserting project notes links into Tasks
+
+You can choose to have the plugin automatically edit every Todoist Task's description with a link to its corresponding project note. If you show the description in your Todoist Sync query, it will then show up like this:
+![[docs/notes in tasks.png]]
+
+# Todos
+
+This plugin is very much a work in progress. Here is a vague list of things I'd like to improve at some point. Feel free to suggest additions or open issues / PRs.
+- [ ] automatically update links in other project notes and tasks on rename
+- [ ] adding some form of support for sections
+- [ ] check for empty folders and delete them
+- [ ] support choosing different templates based on some conditions.
+
+
