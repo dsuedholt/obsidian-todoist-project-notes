@@ -89,29 +89,25 @@ export default class ProjectNotesPlugin extends Plugin {
 			throw new Error('Notes folder not found.');
 		}
 
-		return new Promise((resolve, reject) => {
-			const proms = Array<Promise<void>>();
-			
-			// this would be so much easier if recurseChildren would return a promise
-			Vault.recurseChildren(rootFolder, (f) => {
-				if (!(f instanceof TFile)) return;
-				if (f.path.startsWith(normalizePath(join(this.settings.notefolder, this.settings.archivefolder)))) return;
+		const proms = Array<Promise<void>>();
+		
+		Vault.recurseChildren(rootFolder, (f) => {
+			if (!(f instanceof TFile)) return;
+			if (f.path.startsWith(normalizePath(join(this.settings.notefolder, this.settings.archivefolder)))) return;
 
-				proms.push(this.app.fileManager.processFrontMatter(f, (frontmatter) => {
-					const id = frontmatter['todoist-project-id'];
-					if (id) {
-						const files = this.projectInfo.existingNotes.get(id);
-						if (files && !files.includes(f.path)) {
-							files.push(f.path);	
-						} else {
-							this.projectInfo.existingNotes.set(id, [f.path]);
-						}
+			proms.push(this.app.fileManager.processFrontMatter(f, (frontmatter) => {
+				const id = frontmatter['todoist-project-id'];
+				if (id) {
+					const files = this.projectInfo.existingNotes.get(id);
+					if (files && !files.includes(f.path)) {
+						files.push(f.path);	
+					} else {
+						this.projectInfo.existingNotes.set(id, [f.path]);
 					}
-				}));
-			});
-			proms.forEach(async p => { await p;});
-			resolve(undefined);
+				}
+			}));
 		});
+		return Promise.all(proms);
 	}
 
 	updateProjectNotes() {
