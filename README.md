@@ -32,17 +32,17 @@ I would recommend that you install the "Todoist Sync" and "Templater" plugins th
 
 Once you've set up your API key and your project notes folder, bring up the Command palette (Ctrl/Cmd + P by default) and run the "Update Todoist Project Notes" command. The plugin will then create a note for every project and subproject in your Todoist account. By default, they will be sorted into a nested folder structure mirroring your Todoist setup:
 
-![[docs/nested.png]]
+![img](docs/nested.png)
 
 You can change the settings to generate a flat folder instead, where the projects structure is reflected in the file name:
 
-![[docs/flat.png]]
+![img](docs/flat.png)
 
 # Templating
 
 The real use of this plugin comes from combining it with Templater and Todoist Sync. You can specify a template file that will be inserted into every newly created Project Note. Information about the current and other projects can be accessed from within templates through the `app.plugins.plugins['obsidian-todoist-project-notes'].projectInfo` object. It is defined at the top of `src/main.ts`, where you can see its contents.
 
-Using this information, you can build up custom Todoist Sync queries or build up the file structure of the project note however you'd like. Check `Sample Template.md` to get started.
+Using this information, you can build up custom Todoist Sync queries or build up the file structure of the project note however you'd like. Check `Sample Template.md` to get started (turn on code view).
 
 # Syncing with Todoist
 
@@ -60,7 +60,8 @@ You can choose in the settings how you'd like the plugin to handle notes belongi
 ### Inserting project notes links into Tasks
 
 You can choose to have the plugin automatically edit every Todoist Task's description with a link to its corresponding project note. If you show the description in your Todoist Sync query, it will then show up like this:
-![[docs/notes in tasks.png]]
+
+![img](docs/notes_in_tasks.png)
 
 # Todos
 
