@@ -1,7 +1,7 @@
 {
 	"id": "obsidian-todoist-project-notes",
 	"name": "Todoist Project Notes",
-	"version": "1.0.0",
+	"version": "0.1.0",
 	"minAppVersion": "1.0.0",
 	"description": "Automatically create notes for nested projects in Todoist. For use with Todoist Sync and Templater.",
 	"author": "David Südholt",
