@@ -22,13 +22,15 @@ jobs:
           npm install
           npm run build
 
-      - name: Create release
+      - name: Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-
-          gh release create "$tag" \
-            --title="$tag" \
-            --draft \
-            main.js manifest.json
+        with:
+          tag_name: ${{ github.ref }}
+          name: Todoist Project Notes for Obsidian - v${{ github.ref }}
+          draft: true
+          files: |
+            main.js
+            manifest.json
