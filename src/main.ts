@@ -32,9 +32,42 @@ export default class ProjectNotesPlugin extends Plugin {
 		return api;
 	}
 
+	linkTasks() {
+		const api = this.getTodoistApi();
+		api.getTasks()
+			.then((tasks) => {
+				tasks.forEach(t => {
+					const notes = this.projectInfo.existingNotes.get(t.projectId);
+					if (!notes) return;
+					if (notes.length > 1) return;
+
+					const note = notes[0];
+					let desc = t.description;
+					if (!desc) {
+						desc = '';
+					}
+					
+					const insert = `Project note: [[${note.basename}]]`;
+					if (desc.includes(insert)) return;
+					
+					desc = insert + '\n' + desc;
+					
+					api.updateTask(t.id, { description: desc })
+						.catch((error) => {
+							console.error(error);
+							new Notice(`Error updating task '${t.content}'.`);
+						});
+				});
+			})
+			.catch((error) => {
+				console.error(error);
+				new Notice('Error fetching tasks from Todoist. Please check your API key and try again.');
+			});
+	
+	}
+
 	updateProjectNotes() {
-		this.getProjectsTree().then((projInfo) => {
-			if (!projInfo) return;
+		this.getProjectsTree().then(() => {
 			// check existing files in the project folder for Todoist project IDs
 			const rootFolder = this.app.vault.getFolderByPath(this.settings.notefolder);
 			if (!rootFolder) {
@@ -42,12 +75,12 @@ export default class ProjectNotesPlugin extends Plugin {
 				return;
 			}
 
-			projInfo?.roots.forEach(p => {
-					this.updateNoteForProjectAndChildren(projInfo, p);
+			this.projectInfo.roots.forEach(p => {
+					this.updateNoteForProjectAndChildren(p);
 				});
 			
 			// handle deleted projects
-			const deletedProjects = Array.from(projInfo.existingNotes.keys()).filter(id => !projInfo?.projects.has(id));
+			const deletedProjects = Array.from(this.projectInfo.existingNotes.keys()).filter(id => !this.projectInfo.projects.has(id));
 			const method = this.settings.deletedProjectHandling;
 			if (method !== DeletedProjectHandling.Ignore) {
 				const archiveFolder = this.settings.archivefolder;
@@ -55,11 +88,15 @@ export default class ProjectNotesPlugin extends Plugin {
 				const archiveFolderExists = this.app.vault.getFolderByPath(archivePath);
 				if (method === DeletedProjectHandling.Archive) {
 					if (!archiveFolderExists) {
-						this.app.vault.createFolder(archivePath);
+						this.app.vault.createFolder(archivePath)
+							.catch((error) => {
+								console.error(error);
+								new Notice(`Error creating archive folder '${archiveFolder}'.`);
+							});
 					}
 				}
 				deletedProjects.forEach(id => {
-					const notes = projInfo.existingNotes.get(id);
+					const notes = this.projectInfo.existingNotes.get(id);
 					if (notes) {
 						notes.forEach(note => {
 							switch (method) {
@@ -74,12 +111,15 @@ export default class ProjectNotesPlugin extends Plugin {
 					}
 				});
 			}
-
+		}).then(() => {
+			if (this.settings.linktasks) {
+				this.linkTasks();
+			}
 		});
 	}
 
-	updateNoteForProjectAndChildren(info: ProjectInfo, currId: string, path = '') {
-		const p = info.projects.get(currId);
+	updateNoteForProjectAndChildren(currId: string, path = '') {
+		const p = this.projectInfo.projects.get(currId);
 		if (!p) return;
 
 		const baseDir = this.settings.notefolder;
@@ -94,15 +134,23 @@ export default class ProjectNotesPlugin extends Plugin {
 		const normalizedDir = normalizePath(join(baseDir, path));
 		const noteFile = this.app.vault.getFileByPath(normalizedDir + ".md")
 		if (!noteFile) {
-			const existingNotes = info.existingNotes.get(p.id);
+			const existingNotes = this.projectInfo.existingNotes.get(p.id);
 			if (existingNotes) {
 				if (existingNotes.length > 1) {
 					new Notice(`Multiple notes containing the same Project ID as '${path}' exist. Please deal with this manually.`);
 				} else {
-					this.app.vault.rename(existingNotes[0], normalizedDir + ".md");
+					this.app.vault.rename(existingNotes[0], normalizedDir + ".md")
+						.catch((error) => {
+							console.error(error);
+							new Notice(`Error moving note to '${path}'. Does it already exist somewhere?`);
+						});
 				}
 			} else {
-				this.app.vault.create(normalizedDir + ".md", noteContent);
+				this.app.vault.create(normalizedDir + ".md", noteContent)
+					.catch((error) => {
+						console.error(error);
+						new Notice(`Error creating note '${path}'. Does it already exist somewhere?`);
+					});
 			}
 		}
 		else {
@@ -113,15 +161,15 @@ export default class ProjectNotesPlugin extends Plugin {
 			});
 		}
 		
-		const children = info.children.get(currId);
+		const children = this.projectInfo.children.get(currId);
 
 		if (children) {
 			if (this.settings.nested && !this.app.vault.getAbstractFileByPath(normalizedDir)) {
 				this.app.vault.createFolder(normalizedDir);
 			}
 
-			info.children.get(currId)?.forEach(c => {
-				this.updateNoteForProjectAndChildren(info, c, path);
+			this.projectInfo.children.get(currId)?.forEach(c => {
+				this.updateNoteForProjectAndChildren(c, path);
 			});
 		}
 	}
@@ -192,6 +240,11 @@ export default class ProjectNotesPlugin extends Plugin {
 		this.projectInfo = new ProjectInfo();
 
 		await this.loadSettings();
+
+		this.app.vault.getFiles().forEach(f => {
+			this.checkProjectInfo(f);
+		});
+
 		this.registerEvent(this.app.vault.on('create', (file) => {
 			this.checkProjectInfo(file);
 		}));
@@ -207,7 +260,6 @@ export default class ProjectNotesPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on('delete', (file) => {
 			this.removeProjectInfo(file);
 		}));
-
 
 		this.addCommand({
 			id: 'update-project-notes',

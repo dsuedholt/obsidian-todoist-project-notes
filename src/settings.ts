@@ -15,6 +15,7 @@ export interface ProjectNotesSettings {
 	separator: string;
 	deletedProjectHandling: DeletedProjectHandling;
 	archivefolder: string;
+    linktasks: boolean;
 }
 
 export const DEFAULT_SETTINGS: ProjectNotesSettings = {
@@ -23,7 +24,8 @@ export const DEFAULT_SETTINGS: ProjectNotesSettings = {
 	nested: true,
 	separator: ' ~ ',
 	deletedProjectHandling: DeletedProjectHandling.Ignore,
-	archivefolder: '__ArchivedNotes'
+	archivefolder: '__ArchivedNotes',
+    linktasks: false,
 }
 
 export class ProjectNotesTab extends PluginSettingTab {
@@ -118,6 +120,16 @@ export class ProjectNotesTab extends PluginSettingTab {
 				}));
 		
 		updateSepDescription(this.plugin.settings.separator);
+
+        new Setting(containerEl)
+            .setName('Insert links in task description')
+            .setDesc('Enabled: Insert a link to the Project Note into the descriptions of all Todoist tasks of the project.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.linktasks)
+                .onChange(async (value) => {
+                    this.plugin.settings.linktasks = value;
+                    await this.plugin.saveSettings();
+                }));
 
 		containerEl.createEl('h2', {text: 'Deleted Projects'})
 		containerEl.createEl('p', {text: 'The plugin saves the unique Todoist project ID in the note file. Renamed projects will automatically be moved. Deleted projects will be handled according to the setting below.'});
