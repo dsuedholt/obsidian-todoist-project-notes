@@ -16,6 +16,7 @@ export interface ProjectNotesSettings {
 	deletedProjectHandling: DeletedProjectHandling;
 	archivefolder: string;
     linktasks: boolean;
+    templatefile: string;
 }
 
 export const DEFAULT_SETTINGS: ProjectNotesSettings = {
@@ -23,9 +24,10 @@ export const DEFAULT_SETTINGS: ProjectNotesSettings = {
 	notefolder: '',
 	nested: true,
 	separator: ' ~ ',
-	deletedProjectHandling: DeletedProjectHandling.Ignore,
+	deletedProjectHandling: DeletedProjectHandling.Archive,
 	archivefolder: '__ArchivedNotes',
     linktasks: false,
+    templatefile: ''
 }
 
 export class ProjectNotesTab extends PluginSettingTab {
@@ -40,6 +42,8 @@ export class ProjectNotesTab extends PluginSettingTab {
 		const {containerEl} = this;
 
 		containerEl.empty();
+
+        containerEl.createEl('h2', {text: 'Todoist Integration'})
 
 		const desc = document.createDocumentFragment()		
 
@@ -63,6 +67,19 @@ export class ProjectNotesTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 		
+        new Setting(containerEl)
+            .setName('Insert links in task description')
+            .setDesc('Insert a link to the Project Note into the descriptions of all Todoist tasks of the project.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.linktasks)
+                .onChange(async (value) => {
+                    this.plugin.settings.linktasks = value;
+                    await this.plugin.saveSettings();
+                }));
+
+
+        containerEl.createEl('h2', {text: 'Project Notes Organization'})
+        
 		new Setting(containerEl)
 			.setName('Project notes folder')
 			.setDesc('Choose the folder where you want to store your project notes. NOTE: Please restart Obsidian after changing this setting, otherwise the plugin will not keep track of existing project notes properly.')
@@ -121,13 +138,14 @@ export class ProjectNotesTab extends PluginSettingTab {
 		
 		updateSepDescription(this.plugin.settings.separator);
 
-        new Setting(containerEl)
-            .setName('Insert links in task description')
-            .setDesc('Enabled: Insert a link to the Project Note into the descriptions of all Todoist tasks of the project.')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.linktasks)
+        new Setting(containerEl) 
+            .setName('Template file')
+            .setDesc('Choose a template file to insert into new project notes.')
+            .addText(text => text
+                .setPlaceholder('Enter the file name...')
+                .setValue(this.plugin.settings.templatefile)
                 .onChange(async (value) => {
-                    this.plugin.settings.linktasks = value;
+                    this.plugin.settings.templatefile = value;
                     await this.plugin.saveSettings();
                 }));
 

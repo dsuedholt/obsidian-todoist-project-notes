@@ -1,4 +1,4 @@
-import { Notice, normalizePath, Plugin, TAbstractFile, TFile } from 'obsidian';
+import { Notice, normalizePath, Plugin, TAbstractFile, TFile, getFrontMatterInfo } from 'obsidian';
 import { TodoistApi, Project } from '@doist/todoist-api-typescript';
 import { join } from 'path';
 
@@ -26,6 +26,8 @@ class ProjectInfo {
 export default class ProjectNotesPlugin extends Plugin {
 	settings: ProjectNotesSettings;
 	projectInfo: ProjectInfo;
+	templateFrontMatter: string;
+	templateBody: string;
 
 	getTodoistApi() {
 		const api = new TodoistApi(this.settings.apikey);
@@ -73,55 +75,79 @@ export default class ProjectNotesPlugin extends Plugin {
 	}
 
 	updateProjectNotes() {
-		this.getProjectsTree().then(() => {
-			// check existing files in the project folder for Todoist project IDs
-			const rootFolder = this.app.vault.getFolderByPath(this.settings.notefolder);
-			if (!rootFolder) {
-				new Notice(`The specified notes folder '${this.settings.notefolder}' does not exist.`);
-				return;
-			}
+		this.getProjectsTree()
+			.then(() => {
+				this.templateBody = '';
+				this.templateFrontMatter = '';
 
-			this.projectInfo.roots.forEach(p => {
-					this.updateNoteForProjectAndChildren(p);
-				});
-			
-			// handle deleted projects
-			const deletedProjects = Array.from(this.projectInfo.existingNotes.keys()).filter(id => !this.projectInfo.projects.has(id));
-			const method = this.settings.deletedProjectHandling;
-			if (method !== DeletedProjectHandling.Ignore) {
-				const archiveFolder = this.settings.archivefolder;
-				const archivePath = normalizePath(join(this.settings.notefolder, archiveFolder));
-				const archiveFolderExists = this.app.vault.getFolderByPath(archivePath);
-				if (method === DeletedProjectHandling.Archive) {
-					if (!archiveFolderExists) {
-						this.app.vault.createFolder(archivePath)
-							.catch((error) => {
-								console.error(error);
-								new Notice(`Error creating archive folder '${archiveFolder}'.`);
-							});
-					}
+				if (this.settings.templatefile === '') { return; }
+
+				const templateFile = this.app.vault.getFileByPath(normalizePath(this.settings.templatefile + ".md"));
+				if (!templateFile) {
+					new Notice('The specified template file could not be loaded. Aborting.');
+					throw new Error('Template file not found.');
 				}
-				deletedProjects.forEach(id => {
-					const notes = this.projectInfo.existingNotes.get(id);
-					if (notes) {
-						notes.forEach(note => {
-							switch (method) {
-								case DeletedProjectHandling.Archive:
-									this.app.vault.rename(note, join(archivePath, note.basename) + ".md");
-									break;
-								case DeletedProjectHandling.Delete:
-									this.app.vault.delete(note);
-									break;
-							}
-						});
+
+				this.app.vault.cachedRead(templateFile)
+					.then((template) => {
+						const frontMatterInfo = getFrontMatterInfo(template);
+						if (frontMatterInfo.exists) {
+							this.templateFrontMatter = frontMatterInfo.frontmatter;
+						}
+						this.templateBody = template.slice(frontMatterInfo.contentStart);
+					});
+			})
+			.then(() => {
+				// check existing files in the project folder for Todoist project IDs
+				const rootFolder = this.app.vault.getFolderByPath(this.settings.notefolder);
+				if (!rootFolder) {
+					new Notice(`The specified notes folder '${this.settings.notefolder}' does not exist.`);
+					throw new Error('Notes folder not found.');
+				}
+
+				this.projectInfo.roots.forEach(p => {
+						this.updateNoteForProjectAndChildren(p);
+					});
+				
+				// handle deleted projects
+				const deletedProjects = Array.from(this.projectInfo.existingNotes.keys()).filter(id => !this.projectInfo.projects.has(id));
+				const method = this.settings.deletedProjectHandling;
+				if (method !== DeletedProjectHandling.Ignore) {
+					const archiveFolder = this.settings.archivefolder;
+					const archivePath = normalizePath(join(this.settings.notefolder, archiveFolder));
+					const archiveFolderExists = this.app.vault.getFolderByPath(archivePath);
+					if (method === DeletedProjectHandling.Archive) {
+						if (!archiveFolderExists) {
+							this.app.vault.createFolder(archivePath)
+								.catch((error) => {
+									console.error(error);
+									new Notice(`Error creating archive folder '${archiveFolder}'.`);
+									throw new Error('Archive folder not found.');
+								});
+						}
 					}
-				});
-			}
-		}).then(() => {
-			if (this.settings.linktasks) {
-				this.linkTasks();
-			}
-		});
+					deletedProjects.forEach(id => {
+						const notes = this.projectInfo.existingNotes.get(id);
+						if (notes) {
+							notes.forEach(note => {
+								switch (method) {
+									case DeletedProjectHandling.Archive:
+										this.app.vault.rename(note, join(archivePath, note.basename) + ".md");
+										break;
+									case DeletedProjectHandling.Delete:
+										this.app.vault.delete(note);
+										break;
+								}
+							});
+						}
+					});
+				}
+			})
+			.then(() => {
+				if (this.settings.linktasks) {
+					this.linkTasks();
+				}
+			});
 	}
 
 	updateNoteForProjectAndChildren(currId: string, path = '') {
@@ -135,7 +161,7 @@ export default class ProjectNotesPlugin extends Plugin {
 		} else {
 			path = path + (path ? this.settings.separator : '') + p.name;
 		}
-		const noteContent = `---\ntodoist-project-id: '${p.id}'\n---`;
+		const noteContent = `---\ntodoist-project-id: '${p.id}'\n${this.templateFrontMatter}---\n\n${this.templateBody}`;
 		
 		const normalizedDir = normalizePath(join(baseDir, path));
 		const noteFile = this.app.vault.getFileByPath(normalizedDir + ".md")
