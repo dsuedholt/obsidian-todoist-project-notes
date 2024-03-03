@@ -1,4 +1,4 @@
-import { Notice, normalizePath, Plugin, TAbstractFile, TFile, getFrontMatterInfo } from 'obsidian';
+import { Notice, normalizePath, Plugin, TFile, getFrontMatterInfo, Vault, TFolder } from 'obsidian';
 import { TodoistApi, Project } from '@doist/todoist-api-typescript';
 import { join } from 'path';
 
@@ -79,114 +79,169 @@ export default class ProjectNotesPlugin extends Plugin {
 	
 	}
 
-	updateProjectNotes() {
-		this.getProjectsTree()
-			.then(() => {
-				this.templateBody = '';
-				this.templateFrontMatter = '';
+	// check existing files in the project folder for Todoist project IDs
+	getExistingNotes() {
+		this.projectInfo.existingNotes.clear();
 
-				if (this.settings.templatefile === '') { return; }
+		const rootFolder = this.app.vault.getFolderByPath(this.settings.notefolder);
+		if (!rootFolder) {
+			new Notice(`The specified notes folder '${this.settings.notefolder}' does not exist.`);
+			throw new Error('Notes folder not found.');
+		}
 
-				const templateFile = this.app.vault.getFileByPath(normalizePath(this.settings.templatefile + ".md"));
-				if (!templateFile) {
-					new Notice('The specified template file could not be loaded. Aborting.');
-					throw new Error('Template file not found.');
-				}
+		return new Promise((resolve, reject) => {
+			const proms = Array<Promise<void>>();
+			
+			// this would be so much easier if recurseChildren would return a promise
+			Vault.recurseChildren(rootFolder, (f) => {
+				if (!(f instanceof TFile)) return;
+				if (f.path.startsWith(normalizePath(join(this.settings.notefolder, this.settings.archivefolder)))) return;
 
-				this.app.vault.cachedRead(templateFile)
-					.then((template) => {
-						const frontMatterInfo = getFrontMatterInfo(template);
-						if (frontMatterInfo.exists) {
-							this.templateFrontMatter = frontMatterInfo.frontmatter;
-						}
-						this.templateBody = template.slice(frontMatterInfo.contentStart);
-					});
-			})
-			.then(() => {
-				// check existing files in the project folder for Todoist project IDs
-				const rootFolder = this.app.vault.getFolderByPath(this.settings.notefolder);
-				if (!rootFolder) {
-					new Notice(`The specified notes folder '${this.settings.notefolder}' does not exist.`);
-					throw new Error('Notes folder not found.');
-				}
-
-
-				// construct all note paths for the project tree first, and then actually create the notes in a second step. 
-				// this ensures that the note path for each project is available for templating at note creation time.
-				
-				this.projectInfo.roots.forEach(p => {
-					this.updateNotePathForProjectAndChildren(p);
-				});
-				
-				this.projectInfo.roots.forEach(p => {
-					this.createNoteForProjectAndChildren(p);
-				});
-				
-				// handle deleted projects
-				const deletedProjects = Array.from(this.projectInfo.existingNotes.keys()).filter(id => !this.projectInfo.projects.has(id));
-				const method = this.settings.deletedProjectHandling;
-				if (method !== DeletedProjectHandling.Ignore) {
-					const archiveFolder = this.settings.archivefolder;
-					const archivePath = normalizePath(join(this.settings.notefolder, archiveFolder));
-					const archiveFolderExists = this.app.vault.getFolderByPath(archivePath);
-					if (method === DeletedProjectHandling.Archive) {
-						if (!archiveFolderExists) {
-							this.app.vault.createFolder(archivePath)
-								.catch((error) => {
-									console.error(error);
-									new Notice(`Error creating archive folder '${archiveFolder}'.`);
-									throw new Error('Archive folder not found.');
-								});
+				proms.push(this.app.fileManager.processFrontMatter(f, (frontmatter) => {
+					const id = frontmatter['todoist-project-id'];
+					if (id) {
+						const files = this.projectInfo.existingNotes.get(id);
+						if (files && !files.includes(f.path)) {
+							files.push(f.path);	
+						} else {
+							this.projectInfo.existingNotes.set(id, [f.path]);
 						}
 					}
-					deletedProjects.forEach(id => {
-						const notes = this.projectInfo.existingNotes.get(id);
-						if (notes) {
-							notes.forEach(note => {
-								const oldFile = this.app.vault.getFileByPath(note);
-								if (oldFile) {
-									switch (method) {
-										case DeletedProjectHandling.Archive:
-											this.app.vault.rename(oldFile, join(archivePath, id + "-" + oldFile.basename) + ".md");
-											break;
-										case DeletedProjectHandling.Delete:
-											this.app.vault.delete(oldFile);
-											break;
-									}
+				}));
+			});
+			proms.forEach(async p => { await p;});
+			resolve(undefined);
+		});
+	}
+
+	updateProjectNotes() {
+		this.getExistingNotes()
+			.then(() => {
+			this.getProjectsTree()
+				.then(() => {
+					this.templateBody = '';
+					this.templateFrontMatter = '';
+
+					if (this.settings.templatefile === '') { return; }
+
+					const templateFile = this.app.vault.getFileByPath(normalizePath(this.settings.templatefile + ".md"));
+					if (!templateFile) {
+						new Notice('The specified template file could not be loaded. Aborting.');
+						throw new Error('Template file not found.');
+					}
+
+					this.app.vault.cachedRead(templateFile)
+						.then((template) => {
+							const frontMatterInfo = getFrontMatterInfo(template);
+							if (frontMatterInfo.exists) {
+								this.templateFrontMatter = frontMatterInfo.frontmatter;
+							}
+							this.templateBody = template.slice(frontMatterInfo.contentStart);
+						});
+				})
+				.then(() => {
+
+					// construct all note paths for the project tree first, and then actually create the notes in a second step. 
+					// this ensures that the note path for each project is available for templating at note creation time.
+					
+					this.updateNotePathForProjectAndChildren().then(() => {
+					
+						this.projectInfo.roots.forEach(p => {
+							this.createNoteForProjectAndChildren(p);
+						});
+						
+						// handle deleted projects
+						const deletedProjects = Array.from(this.projectInfo.existingNotes.keys()).filter(id => !this.projectInfo.projects.has(id));
+						const method = this.settings.deletedProjectHandling;
+						const archiveFolder = this.settings.archivefolder;
+						const archivePath = normalizePath(join(this.settings.notefolder, archiveFolder));
+						const archiveFolderExists = this.app.vault.getFolderByPath(archivePath);
+						
+						const filePromises = new Array<Promise<void>>();
+						if (method !== DeletedProjectHandling.Ignore) {
+							if (method === DeletedProjectHandling.Archive) {
+								if (!archiveFolderExists) {
+									this.app.vault.createFolder(archivePath)
+										.catch((error) => {
+											console.error(error);
+											new Notice(`Error creating archive folder '${archiveFolder}'.`);
+											throw new Error('Archive folder not found.');
+										});
+								}
+							}
+							deletedProjects.forEach(id => {
+								const notes = this.projectInfo.existingNotes.get(id);
+								if (notes) {
+									notes.forEach(note => {
+										const oldFile = this.app.vault.getFileByPath(note);
+										if (oldFile) {
+											switch (method) {
+												case DeletedProjectHandling.Archive:
+													filePromises.push(this.app.vault.rename(oldFile, join(archivePath, id + "-" + oldFile.basename) + ".md"));
+													break;
+												case DeletedProjectHandling.Delete:
+													filePromises.push(this.app.vault.delete(oldFile));
+													break;
+											}
+										}
+									});
 								}
 							});
-						}
+						}		
+						Promise.all(filePromises).then(() => {
+							if (this.settings.linktasks) {
+								this.linkTasks();
+							}
+						});
 					});
-				}
-			})
-			.then(() => {
-				if (this.settings.linktasks) {
-					this.linkTasks();
-				}
+				})
 			});
 	}
 
-	// recursively walk the project tree and construct path names for project notes
-	updateNotePathForProjectAndChildren(currId: string, path = '') {
-		const p = this.projectInfo.projects.get(currId);
-		if (!p) return;
+	// iteratively walk the project tree and construct path names for project notes
+	async updateNotePathForProjectAndChildren() {
+		type Leaf = { id: string, parentPath: string };
+
+		const folderPromises = new Array<Promise<TFolder>>();
+
+		const currLeaves = new Array<Leaf>();
+		this.projectInfo.roots.forEach(r => {
+			currLeaves.push({ id: r, parentPath: '' });
+		});
 
 		const baseDir = this.settings.notefolder;
 
-		if (this.settings.nested) {
-			path = join(path, p.name);
-		} else {
-			path = path + (path ? this.settings.separator : '') + p.name;
-		}
-		
-		this.projectInfo.notePaths.set(currId, normalizePath(join(baseDir, path)));
-		
-		const children = this.projectInfo.children.get(currId);
+		while (currLeaves.length > 0) {
+			const nextLeaves = Array<Leaf>();
+			currLeaves.forEach(async l => {
+				let path = l.parentPath;
+				const project = this.projectInfo.projects.get(l.id);
+				if (!project) return;
 
-		if (children) {
-			this.projectInfo.children.get(currId)?.forEach(c => {
-				this.updateNotePathForProjectAndChildren(c, path);
+				if (this.settings.nested) {
+					path = join(path, project.name);
+				} else {
+					path = path + (path ? this.settings.separator : '') + project.name;
+				}
+				
+				const fullpath = normalizePath(join(baseDir, path));
+				this.projectInfo.notePaths.set(l.id, fullpath)
+				
+				if (this.settings.nested && !this.app.vault.getAbstractFileByPath(fullpath)) {
+					folderPromises.push(this.app.vault.createFolder(fullpath));
+				}
+
+				const children = new Array<Leaf>();
+				this.projectInfo.children.get(l.id)?.forEach(c => {
+					children.push({ id: c, parentPath: path });
+				});
+				
+				nextLeaves.push(...children);
 			});
+			currLeaves.length = 0;
+			currLeaves.push(...nextLeaves);
+
+			await Promise.all(folderPromises);
 		}
 	}
 	
@@ -197,7 +252,9 @@ export default class ProjectNotesPlugin extends Plugin {
 		const noteContent = `---\ntodoist-project-id: '${p.id}'\n${this.templateFrontMatter}---\n\n${this.templateBody}`;
 		
 		const path = this.projectInfo.notePaths.get(currId);
-		if (!path) return;
+		if (!path) {
+			return;
+		}
 
 		const noteFile = this.app.vault.getFileByPath(path + ".md")
 		if (!noteFile) {
@@ -206,6 +263,7 @@ export default class ProjectNotesPlugin extends Plugin {
 				if (existingNotes.length > 1) {
 					new Notice(`Multiple notes containing the same Project ID as '${path}' exist. Please deal with this manually.`);
 				} else {
+					console.log('renaming' + existingNotes[0] + ' to ' + path + ".md")
 					const oldFile = this.app.vault.getFileByPath(existingNotes[0]);
 					if (oldFile) {
 						this.app.vault.rename(oldFile, path + ".md")
@@ -234,9 +292,6 @@ export default class ProjectNotesPlugin extends Plugin {
 		const children = this.projectInfo.children.get(currId);
 
 		if (children) {
-			if (this.settings.nested && !this.app.vault.getAbstractFileByPath(path)) {
-				this.app.vault.createFolder(path);
-			}
 
 			this.projectInfo.children.get(currId)?.forEach(c => {
 				this.createNoteForProjectAndChildren(c);
@@ -269,67 +324,11 @@ export default class ProjectNotesPlugin extends Plugin {
 			});
 		return projects;
 	}
-
-	// called when any file in the vault is created, modified or renamed
-	checkProjectInfo(f: TAbstractFile) {
-		if (!(f instanceof TFile)) return;
-		if (!(this.settings.notefolder == '/' || f.path.startsWith(this.settings.notefolder))) return;
-		if (f.path.startsWith(normalizePath(join(this.settings.notefolder, this.settings.archivefolder)))) return;
-
-		this.app.fileManager.processFrontMatter(f, (frontmatter) => {
-			const id = frontmatter['todoist-project-id'];
-			if (id) {
-				const files = this.projectInfo.existingNotes.get(id);
-				if (files && !files.includes(f.path)) {
-					files.push(f.path);	
-				} else {
-					this.projectInfo.existingNotes.set(id, [f.path]);
-				}
-			}
-		});
-
-	}
-
-	// called when any file in the vault is deleted
-	removeProjectInfo(f: TAbstractFile) {
-		if (!(f instanceof TFile)) return;
-		if (!(this.settings.notefolder == '/' || f.path.startsWith(this.settings.notefolder))) return;
-	
-		this.projectInfo.existingNotes.forEach((files, id) => {
-			const index = files.indexOf(f.path);
-			if (index > -1) {
-				files.splice(index, 1);
-				if (files.length === 0) {
-					this.projectInfo.existingNotes.delete(id);
-				}
-			}
-		});
-	}	
 	
 	async onload() {
 		this.projectInfo = new ProjectInfo();
 
 		await this.loadSettings();
-
-		this.app.vault.getFiles().forEach(f => {
-			this.checkProjectInfo(f);
-		});
-
-		this.registerEvent(this.app.vault.on('create', (file) => {
-			this.checkProjectInfo(file);
-		}));
-
-		this.registerEvent(this.app.vault.on('modify', (file) => {
-			this.checkProjectInfo(file);
-		}));
-
-		this.registerEvent(this.app.vault.on('rename', (file) => {
-			this.checkProjectInfo(file);
-		}));
-
-		this.registerEvent(this.app.vault.on('delete', (file) => {
-			this.removeProjectInfo(file);
-		}));
 
 		this.addCommand({
 			id: 'update-project-notes',
