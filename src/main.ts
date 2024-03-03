@@ -12,7 +12,7 @@ class ProjectInfo {
 	notePaths: Map<string, string>;
 	
 	// internal use: keeping track of moved, modified, deleted projects
-	existingNotes: Map<string, TFile[]>;
+	existingNotes: Map<string, string[]>;
 
 	initProjects() {
 		this.projects = new Map();
@@ -47,7 +47,8 @@ export default class ProjectNotesPlugin extends Plugin {
 					if (!notes) return;
 					if (notes.length > 1) return;
 
-					const note = notes[0];
+					const note = this.app.vault.getFileByPath(notes[0]);
+					if (!note) return;
 					let desc = t.description;
 					if (!desc) {
 						desc = '';
@@ -142,13 +143,16 @@ export default class ProjectNotesPlugin extends Plugin {
 						const notes = this.projectInfo.existingNotes.get(id);
 						if (notes) {
 							notes.forEach(note => {
-								switch (method) {
-									case DeletedProjectHandling.Archive:
-										this.app.vault.rename(note, join(archivePath, note.basename) + ".md");
-										break;
-									case DeletedProjectHandling.Delete:
-										this.app.vault.delete(note);
-										break;
+								const oldFile = this.app.vault.getFileByPath(note);
+								if (oldFile) {
+									switch (method) {
+										case DeletedProjectHandling.Archive:
+											this.app.vault.rename(oldFile, join(archivePath, id + "-" + oldFile.basename) + ".md");
+											break;
+										case DeletedProjectHandling.Delete:
+											this.app.vault.delete(oldFile);
+											break;
+									}
 								}
 							});
 						}
@@ -202,11 +206,14 @@ export default class ProjectNotesPlugin extends Plugin {
 				if (existingNotes.length > 1) {
 					new Notice(`Multiple notes containing the same Project ID as '${path}' exist. Please deal with this manually.`);
 				} else {
-					this.app.vault.rename(existingNotes[0], path + ".md")
-						.catch((error) => {
-							console.error(error);
-							new Notice(`Error moving note to '${path}'. Does it already exist somewhere?`);
-						});
+					const oldFile = this.app.vault.getFileByPath(existingNotes[0]);
+					if (oldFile) {
+						this.app.vault.rename(oldFile, path + ".md")
+							.catch((error) => {
+								console.error(error);
+								new Notice(`Error moving note to '${path}'. Does it already exist somewhere?`);
+							});
+					}
 				}
 			} else {
 				this.app.vault.create(path + ".md", noteContent)
@@ -273,10 +280,10 @@ export default class ProjectNotesPlugin extends Plugin {
 			const id = frontmatter['todoist-project-id'];
 			if (id) {
 				const files = this.projectInfo.existingNotes.get(id);
-				if (files && !files.includes(f)) {
-					files.push(f);	
+				if (files && !files.includes(f.path)) {
+					files.push(f.path);	
 				} else {
-					this.projectInfo.existingNotes.set(id, [f]);
+					this.projectInfo.existingNotes.set(id, [f.path]);
 				}
 			}
 		});
@@ -289,7 +296,7 @@ export default class ProjectNotesPlugin extends Plugin {
 		if (!(this.settings.notefolder == '/' || f.path.startsWith(this.settings.notefolder))) return;
 	
 		this.projectInfo.existingNotes.forEach((files, id) => {
-			const index = files.indexOf(f);
+			const index = files.indexOf(f.path);
 			if (index > -1) {
 				files.splice(index, 1);
 				if (files.length === 0) {
