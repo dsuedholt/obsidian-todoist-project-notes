@@ -227,14 +227,14 @@ export default class ProjectNotesPlugin extends Plugin {
 				const fullpath = normalizePath(join(baseDir, path));
 				this.projectInfo.notePaths.set(l.id, fullpath)
 				
-				if (this.settings.nested && !this.app.vault.getAbstractFileByPath(fullpath)) {
-					folderPromises.push(this.app.vault.createFolder(fullpath));
-				}
-
 				const children = new Array<Leaf>();
 				this.projectInfo.children.get(l.id)?.forEach(c => {
 					children.push({ id: c, parentPath: path });
 				});
+
+				if (children.length > 0 && this.settings.nested && !this.app.vault.getAbstractFileByPath(fullpath)) {
+					folderPromises.push(this.app.vault.createFolder(fullpath));
+				}
 				
 				nextLeaves.push(...children);
 			});
@@ -263,7 +263,6 @@ export default class ProjectNotesPlugin extends Plugin {
 				if (existingNotes.length > 1) {
 					new Notice(`Multiple notes containing the same Project ID as '${path}' exist. Please deal with this manually.`);
 				} else {
-					console.log('renaming' + existingNotes[0] + ' to ' + path + ".md")
 					const oldFile = this.app.vault.getFileByPath(existingNotes[0]);
 					if (oldFile) {
 						this.app.vault.rename(oldFile, path + ".md")
