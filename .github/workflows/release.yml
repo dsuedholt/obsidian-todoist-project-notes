@@ -5,6 +5,10 @@ on:
     tags:
       - "*"
 
+env:
+  PLUGIN_NAME: ${{ github.event.repository.name }}
+  RELEASE_VER: ${{ github.ref }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,15 +26,16 @@ jobs:
           npm install
           npm run build
 
+      - name: Create Archive
+        run: |
+          mkdir "${PLUGIN_NAME}"
+          cp -r main.js manifest.json "${PLUGIN_NAME}"
+          zip -r "${PLUGIN_NAME}".zip "${PLUGIN_NAME}"
+
       - name: Release
         id: create_release
-        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          name: Todoist Project Notes for Obsidian - v${{ github.ref }}
-          draft: true
-          files: |
-            main.js
-            manifest.json
+        run: |
+          TAG_NAME=${RELEASE_VER##*/}
+          gh release create "$TAG_NAME" main.js manifest.json "$PLUGIN_NAME".zip -t "$TAG_NAME" 
